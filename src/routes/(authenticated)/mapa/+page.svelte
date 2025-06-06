@@ -1,338 +1,251 @@
 <script lang="ts">
-    import { onMount } from "svelte";
-    import {
-        PUBLIC_SUPABASE_URL,
-        PUBLIC_SUPABASE_ANON_KEY,
-    } from "$env/static/public";
-    import { createClient } from "@supabase/supabase-js";
+  import type { SupabaseClient } from "@supabase/supabase-js";
+  import { onMount } from "svelte";
+  import { writable, get } from "svelte/store";
+  import NichoModal from "$lib/components/NichoModal.svelte";
 
-    const supabase = createClient(
-        PUBLIC_SUPABASE_URL,
-        PUBLIC_SUPABASE_ANON_KEY,
-    );
-    type Contrato = {
-        fecha_inicio: string;
-        duracion_anios: number;
-        tipo_pago: string;
-        monto_total: number;
+  export let data: { supabase: SupabaseClient };
+  const supabase = data.supabase;
+
+  type Nicho = {
+    id: string;
+    pasillo: string;
+    fila: number;
+    columna: number;
+    estado: string;
+    ocupado: boolean;
+  };
+
+  type Fallecido = {
+    nombre: string;
+    fecha_nacimiento: string | null;
+    fecha_fallecimiento: string | null;
+    fecha_inhumacion: string | null;
+    observaciones: string | null;
+    responsable_id: string;
+  };
+
+  type Responsable = {
+    nombre: string;
+    dni: string | null;
+    telefono: string | null;
+    email: string | null;
+  };
+
+  type Contrato = {
+    fecha_inicio: string;
+    duracion_anios: number;
+    tipo_pago: string;
+    monto_total: number;
+  };
+
+  let nichos = writable<Nicho[]>([]);
+  let pasillos = writable<string[]>([]);
+  let selectedNicho: Nicho | null = null;
+  let fallecido: Fallecido;
+  let responsable: Responsable;
+  let contrato: Contrato = {
+    fecha_inicio: new Date().toISOString().split("T")[0],
+    duracion_anios: 1,
+    tipo_pago: "total",
+    monto_total: 0,
+  };
+
+  let showModal = false;
+  let loading = false;
+
+  onMount(async () => {
+    const { data, error } = await supabase
+      .from("nichos")
+      .select("*")
+      .order("pasillo")
+      .order("fila")
+      .order("columna");
+    if (error) return console.error(error);
+    nichos.set(data);
+    pasillos.set([...new Set(data.map((n) => n.pasillo))]);
+  });
+
+  async function abrirModal(nicho: Nicho) {
+    selectedNicho = nicho;
+    fallecido = {
+      nombre: "",
+      fecha_nacimiento: null,
+      fecha_fallecimiento: null,
+      fecha_inhumacion: null,
+      observaciones: null,
+      responsable_id: "",
     };
 
-    let contrato: Contrato = {
-        fecha_inicio: new Date().toISOString().split("T")[0],
-        duracion_anios: 1,
-        tipo_pago: "total",
-        monto_total: 0,
+    responsable = {
+      nombre: "",
+      dni: null,
+      telefono: null,
+      email: null,
     };
 
-    type Nicho = {
-        id: string;
-        pasillo: string;
-        fila: number;
-        columna: number;
-        estado: string;
-        ocupado: boolean;
-    };
+    if (nicho.estado === "ocupado") {
+      const { data: fallecidoData, error: fErr } = await supabase
+        .from("fallecidos")
+        .select("*")
+        .eq("nicho_id", nicho.id)
+        .maybeSingle();
+      if (fErr) return console.error(fErr);
+      fallecido = fallecidoData;
 
-    type Fallecido = {
-        nombre: string;
-        fecha_fallecimiento: string | null;
-        fecha_inhumacion: string | null;
-        observaciones: string | null;
-        responsable_id: string;
-    };
+      const { data: respData, error: rErr } = await supabase
+        .from("responsables")
+        .select("*")
+        .eq("id", fallecido?.responsable_id)
+        .maybeSingle();
+      if (rErr) return console.error(rErr);
+      responsable = respData;
+    }
 
-    type Responsable = {
-        nombre: string;
-        dni: string | null;
-        telefono: string | null;
-        email: string | null;
-    };
+    showModal = true;
+  }
 
-    let nichos: Nicho[] = [];
-    let pasillos: string[] = [];
-    let selectedNicho: Nicho | null = null;
-    let fallecido: Fallecido;
-    let responsable: Responsable;
-    let showModal = false;
+  async function asignarNicho() {
+    if (!selectedNicho || !fallecido || !responsable) return;
+    loading = true;
 
-    onMount(async () => {
-        const { data, error } = await supabase.from("nichos").select("*");
-        if (error) return console.error(error);
-        nichos = data;
-        pasillos = [...new Set(nichos.map((n) => n.pasillo))].sort();
+    // Buscar o crear responsable
+    let responsableId = null;
+    if (responsable.dni) {
+      const { data: existing, error: err1 } = await supabase
+        .from("responsables")
+        .select("id")
+        .eq("dni", responsable.dni)
+        .maybeSingle();
+
+      if (err1) {
+        loading = false;
+        return console.error(err1);
+      }
+
+      if (existing) {
+        responsableId = existing.id;
+      } else {
+        const { data: nuevoResp, error: err2 } = await supabase
+          .from("responsables")
+          .insert(responsable)
+          .select()
+          .single();
+        if (err2) {
+          loading = false;
+          return console.error(err2);
+        }
+        responsableId = nuevoResp.id;
+      }
+    }
+
+    // Insertar fallecido
+    const fechaContratacion = contrato.fecha_inicio;
+    const fechaVencimiento = new Date(
+      new Date(fechaContratacion).setFullYear(
+        new Date(fechaContratacion).getFullYear() + contrato.duracion_anios
+      )
+    )
+      .toISOString()
+      .split("T")[0];
+
+    const montoPorCuota =
+      contrato.tipo_pago === "cuotas"
+        ? contrato.monto_total / (contrato.duracion_anios * 12)
+        : contrato.monto_total;
+
+    const { error: err3 } = await supabase.from("fallecidos").insert({
+      ...fallecido,
+      nicho_id: selectedNicho.id,
+      responsable_id: responsableId,
+      cremado: false,
+      fecha_cremacion: null,
+      fecha_contratacion: fechaContratacion,
+      fecha_vencimiento: fechaVencimiento,
+      tipo_contrato: contrato.tipo_pago,
+      duracion_anios: contrato.duracion_anios,
+      forma_pago: contrato.tipo_pago,
+      monto_total: contrato.monto_total,
+      monto_por_cuota: montoPorCuota,
     });
 
-    async function asignarNicho() {
-        if (!selectedNicho || !fallecido || !responsable) return;
-
-        // Buscar responsable por DNI (si existe)
-        let responsableId: string | null = null;
-        if (responsable.dni) {
-            const { data: existingResp, error: err } = await supabase
-                .from("responsables")
-                .select("id")
-                .eq("dni", responsable.dni)
-                .maybeSingle();
-
-            if (err) return console.error("Error buscando responsable", err);
-
-            if (existingResp) {
-                responsableId = existingResp.id;
-            } else {
-                // Crear nuevo responsable
-                const { data: newResp, error: err2 } = await supabase
-                    .from("responsables")
-                    .insert(responsable)
-                    .select()
-                    .single();
-
-                if (err2)
-                    return console.error("Error creando responsable", err2);
-                responsableId = newResp.id;
-            }
-        }
-
-        // Crear fallecido
-        const { data: fallecidoCreated, error: err3 } = await supabase
-            .from("fallecidos")
-            .insert({
-                ...fallecido,
-                nicho_id: selectedNicho.id,
-                responsable_id: responsableId,
-            })
-            .select()
-            .single();
-
-        if (err3) return console.error("Error creando fallecido", err3);
-
-        // Crear contrato
-        const { error: err4 } = await supabase.from("contratos").insert({
-            responsable_id: responsableId,
-            nicho_id: selectedNicho.id,
-            fecha_inicio: contrato.fecha_inicio,
-            duracion_anios: contrato.duracion_anios,
-            tipo_pago: contrato.tipo_pago,
-            monto_total: contrato.monto_total,
-            estado: "activo",
-        });
-
-        if (err4) return console.error("Error creando contrato", err4);
-
-        // Actualizar estado del nicho
-        const { error: err5 } = await supabase
-            .from("nichos")
-            .update({ estado: "ocupado" })
-            .eq("id", selectedNicho.id);
-
-        if (err5) return console.error("Error actualizando nicho", err5);
-
-        // Refrescar mapa y cerrar
-        const { data: actualizados } = await supabase
-            .from("nichos")
-            .select("*");
-        nichos = actualizados ?? [];
-        pasillos = [...new Set(nichos.map((n) => n.pasillo))].sort();
-
-        showModal = false;
+    if (err3) {
+      loading = false;
+      return console.error(err3);
     }
 
-    async function abrirModal(nicho: Nicho) {
-        selectedNicho = nicho;
-        fallecido = {};
-        responsable = {};
-        showModal = true;
+    // Crear contrato
+    const { error: err4 } = await supabase.from("contratos").insert({
+      responsable_id: responsableId,
+      nicho_id: selectedNicho.id,
+      fecha_inicio: contrato.fecha_inicio,
+      duracion_anios: contrato.duracion_anios,
+      tipo_pago: contrato.tipo_pago,
+      monto_total: contrato.monto_total,
+      estado: "activo",
+    });
 
-        if (nicho.estado === "ocupado") {
-            const { data: fallecidos, error: err1 } = await supabase
-                .from("fallecidos")
-                .select("*")
-                .eq("nicho_id", nicho.id)
-                .maybeSingle();
-
-            if (err1) return console.error(err1);
-            fallecido = fallecidos;
-
-            if (fallecido?.responsable_id) {
-                const { data: resp, error: err2 } = await supabase
-                    .from("responsables")
-                    .select("*")
-                    .eq("id", fallecido.responsable_id)
-                    .maybeSingle();
-
-                if (err2) return console.error(err2);
-                responsable = resp;
-            }
-        }
+    if (err4) {
+      loading = false;
+      return console.error(err4);
     }
 
-    function cerrarModal() {
-        showModal = false;
+    // Marcar nicho como ocupado
+    const { error: err5 } = await supabase
+      .from("nichos")
+      .update({ estado: "ocupado", ocupado: true })
+      .eq("id", selectedNicho.id);
+
+    if (err5) {
+      loading = false;
+      return console.error(err5);
     }
+
+    // Refrescar nichos
+    const { data: nuevos } = await supabase
+      .from("nichos")
+      .select("*")
+      .order("pasillo")
+      .order("fila")
+      .order("columna");
+    nichos.set(nuevos ?? []);
+    pasillos.set([...new Set(nuevos?.map((n) => n.pasillo))]);
+
+    showModal = false;
+    loading = false;
+  }
+
+  function cerrarModal() {
+    showModal = false;
+  }
 </script>
 
 <h1 class="text-2xl font-bold mb-4">🗺️ Mapa de Nichos</h1>
-
-{#each pasillos as pasillo}
-    <div class="mb-8">
-        <h2 class="text-lg font-semibold mb-2">Pasillo {pasillo}</h2>
+{#each $pasillos as pasillo}
+  <div class="mb-6">
+    <h2 class="font-semibold">Pasillo {pasillo}</h2>
+    <div class="grid grid-cols-10 gap-1">
+      {#each $nichos.filter((n) => n.pasillo === pasillo) as nicho}
         <div
-            class="grid gap-1"
-            style="grid-template-columns: repeat(10, minmax(0, 1fr));"
+          on:click={() => abrirModal(nicho)}
+          class={`p-2 text-xs text-center cursor-pointer rounded
+            ${nicho.estado === "ocupado" ? "bg-red-400 text-white" : "bg-green-300 text-black"}
+            hover:scale-105 transition`}
+          title={`Fila: ${nicho.fila}, Columna: ${nicho.columna}`}
         >
-            {#each nichos.filter((n) => n.pasillo === pasillo) as nicho}
-                <div
-                    on:click={() => abrirModal(nicho)}
-                    title={`Fila: ${nicho.fila}, Col: ${nicho.columna}, Estado: ${nicho.estado}`}
-                    class={`h-10 rounded flex items-center justify-center text-xs font-semibold cursor-pointer 
-            ${nicho.estado === "ocupado" ? "bg-red-400 text-white" : "bg-green-300 text-gray-800"} 
-            hover:scale-105 transition-transform`}
-                >
-                    {nicho.fila}-{nicho.columna}
-                </div>
-            {/each}
+          {nicho.fila}-{nicho.columna}
         </div>
+      {/each}
     </div>
+  </div>
 {/each}
 
-{#if showModal}
-    <div
-        class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-    >
-        <div
-            class="bg-white rounded-xl shadow-lg p-6 w-[90%] max-w-md relative"
-        >
-            <button
-                class="absolute top-2 right-2 text-xl"
-                on:click={cerrarModal}>✖️</button
-            >
-            <h3 class="text-lg font-semibold mb-2">
-                Nicho: {selectedNicho?.fila}-{selectedNicho?.columna}
-            </h3>
-            {#if selectedNicho?.estado === "ocupado"}
-                <div class="space-y-2 text-sm">
-                    {#if fallecido}
-                        <div>
-                            <strong>Fallecido:</strong>
-                            {fallecido.nombre}<br />
-                            <strong>Falleció:</strong>
-                            {fallecido.fecha_fallecimiento}<br />
-                            <strong>Inhumación:</strong>
-                            {fallecido.fecha_inhumacion}<br />
-                            <strong>Obs:</strong>
-                            {fallecido.observaciones ?? "—"}
-                        </div>
-                    {/if}
-                    {#if responsable}
-                        <div>
-                            <strong>Responsable:</strong>
-                            {responsable.nombre}<br />
-                            <strong>DNI:</strong>
-                            {responsable.dni}<br />
-                            <strong>Tel:</strong>
-                            {responsable.telefono}<br />
-                            <strong>Email:</strong>
-                            {responsable.email}
-                        </div>
-                    {/if}
-                </div>
-            {:else}
-                <form
-                    on:submit|preventDefault={asignarNicho}
-                    class="grid md:grid-cols-2 gap-4 text-sm"
-                >
-                    <div>
-                        <h4 class="font-semibold mb-1">Fallecido</h4>
-                        <input
-                            class="input w-full mb-1"
-                            placeholder="Nombre"
-                            type="text"
-                            bind:value={fallecido.nombre}
-                        />
-                        <label>Fecha Fallecido</label>
-                        <input
-                            class="input w-full mb-1"
-                            type="date"
-                            bind:value={fallecido.fecha_fallecimiento}
-                        />
-                        <label>Fecha Inhumación</label>
-                        <input
-                            class="input w-full"
-                            type="date"
-                            bind:value={fallecido.fecha_inhumacion}
-                            placeholder="Fecha inhumación"
-                        />
-                    </div>
-                    <div>
-                        <h4 class="font-semibold mb-1">Responsable</h4>
-                        <input
-                            class="input w-full mb-1"
-                            placeholder="Nombre"
-                            bind:value={responsable.nombre}
-                        />
-                        <input
-                            class="input w-full mb-1"
-                            placeholder="DNI"
-                            bind:value={responsable.dni}
-                        />
-                        <input
-                            class="input w-full mb-1"
-                            placeholder="Teléfono"
-                            bind:value={responsable.telefono}
-                        />
-                        <input
-                            class="input w-full"
-                            placeholder="Email"
-                            bind:value={responsable.email}
-                        />
-                    </div>
-                    <div class="md:col-span-2">
-                        <h4 class="font-semibold mb-1">Contrato</h4>
-                        <label>Fecha Inicio</label>
-                        <input
-                            class="input w-full mb-1"
-                            type="date"
-                            bind:value={contrato.fecha_inicio}
-                        />
-                        <select
-                            class="input w-full mb-1"
-                            bind:value={contrato.tipo_pago}
-                        >
-                            <option value="mensual">Mensual</option>
-                            <option value="anual">Anual</option>
-                            <option value="total">Total</option>
-                        </select>
-                        <label>Duracion Años</label>
-                        <input
-                            class="input w-full mb-1"
-                            type="number"
-                            min="1"
-                            max="5"
-                            placeholder="Duración en años"
-                            bind:value={contrato.duracion_anios}
-                        />
-                        <label>Monto</label>
-                        <input
-                            class="input w-full"
-                            type="number"
-                            placeholder="Monto total"
-                            bind:value={contrato.monto_total}
-                        />
-                    </div>
-                    <div class="md:col-span-2 flex justify-end">
-                        <button
-                            type="submit"
-                            class="bg-blue-600 text-white px-4 py-2 rounded"
-                            >Confirmar asignación</button
-                        >
-                    </div>
-                </form>
-            {/if}
-        </div>
-    </div>
-{/if}
-
-<style>
-  .input {
-    @apply border border-gray-300 rounded px-2 py-1 text-sm;
-  }
-</style>
+<NichoModal
+  show={showModal}
+  {selectedNicho}
+  {fallecido}
+  {responsable}
+  {cerrarModal}
+  {asignarNicho}
+  {loading}
+/>

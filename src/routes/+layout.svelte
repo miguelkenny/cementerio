@@ -47,27 +47,45 @@
 </script>
 
 <!-- Navbar -->
-<nav class="border-b-2 pb-2 pt-2 flex items-center justify-between px-4 bg-white shadow-sm">
+<nav
+  class="border-b-2 pb-2 pt-2 flex items-center justify-between px-4 bg-white shadow-sm"
+>
   <div class="flex items-center space-x-4">
     <a href="/" class="text-blue-600 font-semibold hover:underline">Inicio</a>
     {#if session}
-      <a href="/app" class="text-blue-600 font-semibold hover:underline">Dashboard</a>
-      <a href="/self" class="text-blue-600 font-semibold hover:underline">Perfil</a>
+      <a href="/app" class="text-blue-600 font-semibold hover:underline"
+        >Dashboard</a
+      >
+      <a href="/self" class="text-blue-600 font-semibold hover:underline"
+        >Perfil</a
+      >
     {/if}
   </div>
   <div class="flex items-center space-x-4">
     {#if session}
       <img
         class="w-8 h-8 rounded-full"
-        src={session.user.user_metadata.avatar_url ?? "https://api.dicebear.com/8.x/fun-emoji/svg"}
+        src={session.user.user_metadata.avatar_url ??
+          "https://api.dicebear.com/8.x/fun-emoji/svg"}
         alt="person_avatar"
       />
-      <p class="text-sm text-gray-600">Expira: {session?.expires_at ? new Date(session.expires_at * 1000).toLocaleString() : "unknown"}</p>
+      <p class="text-sm text-gray-600">{session.user.user_metadata.nickname}</p>
+      <p class="text-sm text-gray-600">
+        Expira: {session?.expires_at
+          ? new Date(session.expires_at * 1000).toLocaleString()
+          : "unknown"}
+      </p>
       <form method="POST" action="auth?/signout">
-        <button class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">Cerrar Sesion</button>
+        <button class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
+          >Cerrar Sesion</button
+        >
       </form>
     {:else}
-      <a href="/auth" class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">Iniciar Sesion</a>
+      <a
+        href="/auth"
+        class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+        >Iniciar Sesion</a
+      >
     {/if}
   </div>
 </nav>
